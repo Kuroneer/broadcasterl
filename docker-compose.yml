@@ -1,0 +1,58 @@
+version: '2'
+
+volumes:
+  rebar3_cache:
+
+services:
+  builder:
+    image: "erlang:22"
+    network_mode: host
+    volumes:
+      - "./:/source"
+      - "rebar3_cache:/rebar_cache"
+    working_dir: "/source"
+    environment:
+      REBAR_CACHE_DIR: /rebar_cache
+    command: [sh, "-c", "exit"]
+
+  erlang-discovery:
+    image: "nginx:1.17"
+    volumes:
+      - "./nginx-config/nginx.conf:/etc/nginx/nginx.conf"
+    depends_on:
+      - node0
+      - node1
+      - node2
+      - node3
+      - node4
+      - node5
+      - node6
+      - node7
+      - node8
+      - node9
+
+  node0:
+    image: "erlang:22"
+    volumes:
+      - "./:/source"
+    working_dir: "/source"
+    command: [bash, _build/default/last_release_launcher, foreground]
+  node1:
+    extends: node0
+  node2:
+    extends: node0
+  node3:
+    extends: node0
+  node4:
+    extends: node0
+  node5:
+    extends: node0
+  node6:
+    extends: node0
+  node7:
+    extends: node0
+  node8:
+    extends: node0
+  node9:
+    extends: node0
+

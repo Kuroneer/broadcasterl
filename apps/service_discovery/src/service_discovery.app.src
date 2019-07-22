@@ -1,0 +1,16 @@
+{application, service_discovery,
+ [{description, "A simple udp-based erlang service discovery"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {mod, { service_discovery, []}},
+  {applications,
+   [kernel,
+    stdlib
+   ]},
+  {env,[]},
+  {modules, []},
+
+  {maintainers, ["Jose Maria Perez Ramos"]},
+  {licenses, ["MIT"]},
+  {links, []}
+ ]}.

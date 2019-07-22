@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+$( dirname "${BASH_SOURCE[0]}" )/rel/{{default_release_name}}/bin/{{default_release_name}} "$@"
+

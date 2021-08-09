@@ -1,6 +1,6 @@
--sname {{default_release_name}}
+-sname {{release_name}}
 
--setcookie {{default_release_name}}
+-setcookie {{release_name}}
 
 +K true
 +A30

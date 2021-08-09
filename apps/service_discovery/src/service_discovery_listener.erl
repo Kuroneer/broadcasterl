@@ -11,16 +11,18 @@
         ]).
 
 -record(state, {
-          node_name,
-          port,
-          socket,
-          timer_ref,
-          timer_msg_ref
+          message = get_message() :: binary(),
+          port :: pos_integer(),
+          broadcast_min = get_pos_integer_application_env(broadcast_min, 1) :: pos_integer(),
+          broadcast_max = get_pos_integer_application_env(broadcast_max, 3) :: pos_integer(),
+          timer_min = get_pos_integer_application_env(timer_min, 1000) :: pos_integer(),
+          timer_max = get_pos_integer_application_env(timer_max, 3000) :: pos_integer(),
+          socket :: gen_udp:socket(),
+          timer_ref :: reference()
          }).
 
--define(TIMER, 5000).
--define(TIMEOUT, timeout).
--define(BROADCAST, 5).
+-define(VERSION_TAG, <<1,0,0>>).
+
 
 %%====================================================================
 %% API functions
@@ -35,14 +37,12 @@ start_link() ->
 %%====================================================================
 
 init(_) ->
-    ListenPort = case os:getenv("DISCOVERY_PORT", 6350) of
-                     I when is_integer(I) -> I;
-                     Other -> list_to_integer(Other)
-                 end,
-    true = ListenPort > 0,
-    {ok, UdpSocket} = gen_udp:open(ListenPort, [{ip, {0,0,0,0}}, {active, true}]),
-    link(UdpSocket),
-    {ok, set_timer(#state{port = ListenPort, socket = UdpSocket, node_name = atom_to_binary(node(), latin1)})}.
+    ok = net_kernel:monitor_nodes(true),
+    ListenPort = get_pos_integer_application_env(discovery_port, 6350),
+    {ok, App} = application:get_application(),
+    ListenOptions = application:get_env(App, listen_options, [{ip, {0,0,0,0}}]),
+    {ok, UdpSocket} = gen_udp:open(ListenPort, [{active, true} | ListenOptions]),
+    {ok, set_timer(#state{port = ListenPort, socket = UdpSocket})}.
 
 handle_cast(_, State) ->
     {noreply, State}.
@@ -50,15 +50,18 @@ handle_cast(_, State) ->
 handle_call(_E, _From, State) ->
     {noreply, State}.
 
-handle_info({?TIMEOUT, Ref}, #state{timer_msg_ref = Ref} = State) ->
-    [ broadcast_info(State) || _ <- lists:seq(1, 1 + rand:uniform(?BROADCAST - 1)) ],
-    logger:notice("Service discovery: Cluster node count is ~w", [length(nodes())+1]),
-    {noreply, set_timer(State)};
+handle_info({timeout, TimerRef, broadcast}, #state{timer_ref = TimerRef, broadcast_min = BroadcastMin, broadcast_max = BroadcastMax} = State) ->
+    {ok, App} = application:get_application(),
+    DiscoveryAddresses = application:get_env(App, discovery_address, ["erlang-discovery"]),
+    {noreply, set_timer(broadcast_info(State, DiscoveryAddresses, rand_between(BroadcastMin, BroadcastMax)))};
 handle_info({udp, Socket, _Ip, _IpPortNo, Data}, #state{socket = Socket} = State) ->
     handle_msg(Data),
     {noreply, State};
-handle_info(check_nodes, State) ->
-    logger:notice("Service discovery: Cluster node count is ~w", [length(nodes())+1]),
+handle_info({nodedown, Node}, State) ->
+    logger:debug("Node ~p DOWN: Cluster node count is ~w", [Node, length(nodes())+1]),
+    {noreply, State};
+handle_info({nodeup, Node}, State) ->
+    logger:debug("Node ~p UP: Cluster node count is ~w", [Node, length(nodes())+1]),
     {noreply, State};
 handle_info(_Msg, State) ->
     {noreply, State}.
@@ -69,44 +72,58 @@ handle_info(_Msg, State) ->
 %%====================================================================
 
 handle_msg(Msg) ->
-    Key = crypto:hash(sha256, atom_to_binary(erlang:get_cookie(), latin1)),
-    case catch crypto:crypto_one_time(rc4, Key, Msg, false) of
-        <<3, NameByteSize/integer, Name:NameByteSize/binary>> ->
+    Tag = ?VERSION_TAG,
+    TagSize = byte_size(?VERSION_TAG),
+    case catch crypto:crypto_one_time(aes_256_ecb, get_key(), Msg, false) of
+        <<Tag:TagSize/binary, NameByteSize:16/integer, Name:NameByteSize/binary, _/binary>> ->
             Node = binary_to_atom(Name, latin1),
             case lists:member(Node, [node() | nodes()]) of
-                true ->
-                    ok;
-                _ ->
-                    logger:notice("Connecting to node ~s...", [Name]),
-                    case net_adm:ping(Node) of
-                        pong ->
-                            % Let the other node know
-                            {?MODULE, Node} ! check_nodes,
-                            ok;
-                        _ ->
-                            ok
-                    end
+                true -> ok;
+                _ -> logger:info("Node ~p CONNECTING: ~p", [Name, net_adm:ping(Node)])
             end;
-        _ ->
-            ok
-    end,
-    ok.
+        _ -> error
+    end.
 
-broadcast_info(#state{port = Port, socket = Socket, node_name = Name}) ->
-    DiscoveryAddress = os:getenv("DISCOVERY_ADDRESS", "erlang-discovery"),
-    Key = crypto:hash(sha256, atom_to_binary(erlang:get_cookie(), latin1)),
-    Data = <<3, (byte_size(Name))/integer, Name/binary>>, % TODO use HMAC instead of '3', add random bytes to prevent replay attacks
-    Packet = crypto:crypto_one_time(rc4, Key, Data, true),
-    gen_udp:send(Socket, DiscoveryAddress, Port, Packet),
-    ok.
+broadcast_info(State, _DiscoveryAddresses, 0) ->
+    State;
+broadcast_info(#state{port = Port, message = Message} = State, DiscoveryAddresses, N) ->
+    % In case the reverse proxy decides to maintain the UDP "connection" open
+    % to the same upstream, use a different Socket to generate the broadcast
+    % packages
+    {ok, Socket} = gen_udp:open(0),
+    [case gen_udp:send(Socket, DiscoveryAddress, Port, Message) of
+         ok -> ok;
+         {error, E} -> logger:warning("Unable to send UDP to ~s: ~p", [DiscoveryAddress, E])
+     end || DiscoveryAddress <- DiscoveryAddresses],
+    gen_udp:close(Socket),
+    broadcast_info(State, DiscoveryAddresses, N - 1).
 
-set_timer(#state{timer_ref = undefined} = State) ->
-    %TODO Make this timer an exponential backoff
-    MsgRef = make_ref(),
-    Rand = trunc(rand:uniform() * 2500),
-    TimerRef = erlang:send_after(?TIMER + Rand, self(), {?TIMEOUT, MsgRef}),
-    State#state{timer_msg_ref = MsgRef, timer_ref = TimerRef};
-set_timer(#state{timer_ref = TimerRef} = State) ->
-    erlang:cancel_timer(TimerRef),
-    set_timer(State#state{timer_ref = undefined}).
+set_timer(#state{timer_min = TimerMin, timer_max = TimerMax} = State) ->
+    % As connecting to any member of the cluster means connecting to the whole
+    % cluster, reduce the chance of sending a message by multiplying by the size
+    % of the cluster
+    Time = (length(nodes()) + 1 ) * rand_between(TimerMin, TimerMax),
+    State#state{timer_ref = erlang:start_timer(Time, self(), broadcast)}.
+
+get_pos_integer_application_env(Key, Default) ->
+    {ok, App} = application:get_application(),
+    Value = application:get_env(App, Key, Default),
+    true = is_integer(Value) andalso Value > 0,
+    Value.
+
+rand_between(A, A) -> A;
+rand_between(A, B) when A < B -> A - 1 + rand:uniform(B + 1 - A);
+rand_between(A, B) -> rand_between(B, A).
+
+get_key() ->
+    crypto:hash(sha256, atom_to_binary(erlang:get_cookie(), latin1)).
+
+get_message() ->
+    Name = atom_to_binary(node(), latin1),
+    Data = <<?VERSION_TAG/binary, (byte_size(Name)):16/integer, Name/binary>>,
+    DataWithPadding = case byte_size(Data) band 15 of
+                       0 -> Data;
+                       B -> <<Data/binary, (list_to_binary(lists:seq(1, 16 - B)))/binary>>
+                   end,
+    crypto:crypto_one_time(aes_256_ecb, get_key(), DataWithPadding, true).
 

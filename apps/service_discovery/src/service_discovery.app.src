@@ -1,6 +1,6 @@
 {application, service_discovery,
  [{description, "A simple udp-based erlang service discovery"},
-  {vsn, "0.1.0"},
+  {vsn, "1.0.0"},
   {registered, []},
   {mod, { service_discovery, []}},
   {applications,

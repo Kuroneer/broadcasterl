@@ -1,18 +1,15 @@
 version: '2'
 
-volumes:
-  rebar3_cache:
-
 services:
   builder:
-    image: "erlang:22"
+    image: "erlang:24"
     network_mode: host
     volumes:
       - "./:/source"
-      - "rebar3_cache:/rebar_cache"
     working_dir: "/source"
-    environment:
-      REBAR_CACHE_DIR: /rebar_cache
+    environment: # Required for tests because / is not writable
+      ERL_FLAGS: -nocookie
+      REBAR_CACHE_DIR: /tmp
     command: [sh, "-c", "exit"]
 
   erlang-discovery:
@@ -32,11 +29,11 @@ services:
       - node9
 
   node0:
-    image: "erlang:22"
+    image: "erlang:24" # prod release has the ERTS, so a smaller image is ok, but this one is already pulled for the builder
     volumes:
       - "./:/source"
     working_dir: "/source"
-    command: [bash, _build/default/last_release_launcher, foreground]
+    command: [_build/prod/last_release_launcher, foreground]
   node1:
     extends: node0
   node2:

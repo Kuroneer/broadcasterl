@@ -108,7 +108,7 @@ node_terminate_after(N) ->
     spawn(fun() -> timer:sleep(N), init:stop() end).
 
 node_disconnect_and_start(RunnerNode) ->
-    % Disconnecto from the runner and start the discovery app
+    % Disconnect from the runner and start the discovery app
     spawn(fun() ->
                   disconnect_node(RunnerNode),
                   application:ensure_all_started(service_discovery)

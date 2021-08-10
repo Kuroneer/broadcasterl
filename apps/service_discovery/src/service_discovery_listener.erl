@@ -18,7 +18,7 @@
           timer_min = get_pos_integer_application_env(timer_min, 1000) :: pos_integer(),
           timer_max = get_pos_integer_application_env(timer_max, 3000) :: pos_integer(),
           socket :: gen_udp:socket(),
-          timer_ref :: reference()
+          timer_ref :: reference() | undefined % undefined only for record initialization
          }).
 
 -define(VERSION_TAG, <<1,0,0>>).

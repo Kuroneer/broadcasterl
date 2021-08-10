@@ -33,6 +33,12 @@ docker-compose up
 You can use rebar3's `git_subdir` dependency, just point it to
 `apps/service_discovery`.
 
+```
+{deps, [
+    {service_discovery, {git_subdir,"https://github.com/kuroneer/broadcasterl.git", {tag,"1.0.0"}, "apps/service_discovery"}}
+]}.
+```
+
 The application has the following configurable values:
 
 ```
